@@ -1,5 +1,5 @@
 /*:
- * @plugindesc Dpad mobile standalone v2.4 - simula teclas reais
+ * @plugindesc Dpad mobile v2.7 - simula teclado + bloqueia touch mapa
  * @author Você + Meta AI
  *
  * @param Dpad Size
@@ -32,6 +32,12 @@
  * @type number
  * @default 40
  *
+ * @param Disable Map Touch
+ * @text Desativar Touch Mapa
+ * @desc ON = clique no mapa não move personagem
+ * @type boolean
+ * @default true
+ *
  * @param Debug
  * @text Debug F8
  * @type boolean
@@ -39,18 +45,16 @@
  *
  * @help
  * ====================================
- * Mobile_Dpad v2.4
+ * Mobile_Dpad v2.7
  * ====================================
  *
- * BUGFIX v2.4:
- * 1. Injeta tecla ANTES do Input.update limpar
- * 2. Corrige detecção de touch no PC e mobile
- * 3. Adiciona Input.isTriggered() e isRepeated()
+ * BUGFIX v2.7:
+ * - Remove chamada de _onKeyDown que crashava
+ * - Seta _currentState direto igual teclado
+ * - Desativa touch do mapa completamente
  *
- * Simula: left, up, right, down, ok, cancel
- * Compatível com eventos que usam Input.isPressed()
- *
- * NÃO USA PKD. É standalone.
+ * PC: usa teclado normal
+ * Mobile: usa dpad que simula teclado
  */
 
 (function() {
@@ -62,18 +66,36 @@
     const OPACITY = Number(params['Opacity'] || 180);
     const DPAD_POS = params['Dpad Pos'] || 'left';
     const MARGIN = Number(params['Margin'] || 40);
+    const DISABLE_MAP_TOUCH = params['Disable Map Touch']!== 'false';
     const DEBUG = params['Debug'] === 'true';
 
     function log(...args) {
         if (DEBUG) console.log('[Mobile_Dpad]',...args);
     }
 
-    log('v2.4 carregado - Dpad:', DPAD_POS, '| Botões:', DPAD_POS === 'left'? 'right' : 'left');
+    log('v2.7 carregado');
 
     //=======================
-    // BUGFIX v2.4: Estado global das teclas
+    // BUGFIX v2.7: Desativa touch do mapa
     //=======================
-    const virtualKeys = {
+    if (DISABLE_MAP_TOUCH) {
+        Scene_Map.prototype.processMapTouch = function() {};
+        
+        Game_Player.prototype.canMove = function() {
+            if (TouchInput.isPressed() &&!this.isInVehicle()) {
+                // Ignora movimento por touch no mapa
+                return false;
+            }
+            return $gameSystem.isMenuEnabled() &&!$gameMap.isEventRunning();
+        };
+        
+        log('Touch do mapa desativado');
+    }
+
+    //=======================
+    // BUGFIX v2.7: Simula tecla sem crash
+    //=======================
+    const vKeys = {
         left: false,
         up: false,
         right: false,
@@ -82,31 +104,67 @@
         cancel: false
     };
 
-    function setVirtualKey(key, pressed) {
-        if (virtualKeys[key]!== pressed) {
-            virtualKeys[key] = pressed;
-            log('KEY', key, pressed? 'PRESS' : 'RELEASE');
+    const touchMap = {
+        dpad: null,
+        ok: null,
+        cancel: null
+    };
+
+    function pressVKey(key, touchId) {
+        if (!vKeys[key]) {
+            vKeys[key] = true;
+            Input._currentState[key] = true;
+            log('KEY', key, 'PRESS', touchId || '');
+        }
+    }
+
+    function releaseVKey(key) {
+        if (vKeys[key]) {
+            vKeys[key] = false;
+            Input._currentState[key] = false;
+            log('KEY', key, 'RELEASE');
+        }
+    }
+
+    // Hook no touchend pra garantir release
+    document.addEventListener('touchend', handleTouchEnd, false);
+    document.addEventListener('touchcancel', handleTouchEnd, false);
+
+    function handleTouchEnd(e) {
+        for (let i = 0; i < e.changedTouches.length; i++) {
+            const id = e.changedTouches[i].identifier;
+            
+            if (touchMap.dpad === id) {
+                log('Touch dpad SOLTOU');
+                touchMap.dpad = null;
+                releaseVKey('left');
+                releaseVKey('up');
+                releaseVKey('right');
+                releaseVKey('down');
+            }
+            
+            if (touchMap.ok === id) {
+                touchMap.ok = null;
+                releaseVKey('ok');
+            }
+            
+            if (touchMap.cancel === id) {
+                touchMap.cancel = null;
+                releaseVKey('cancel');
+            }
         }
     }
 
     //=======================
-    // BUGFIX v2.4: Injeta ANTES do MV limpar
+    // Garante que tecla fica true todo frame
     //=======================
     const _Input_update = Input.update;
     Input.update = function() {
-        // Primeiro injeta nossas teclas
-        for (const key in virtualKeys) {
-            if (virtualKeys[key]) {
-                this._currentState[key] = true;
-            }
-        }
-
-        // Depois roda o update do MV
         _Input_update.call(this);
 
-        // BUGFIX: Garante que tecla continua true após MV limpar
-        for (const key in virtualKeys) {
-            if (virtualKeys[key]) {
+        // Força teclas virtuais depois do clear
+        for (const key in vKeys) {
+            if (vKeys[key]) {
                 this._currentState[key] = true;
             }
         }
@@ -115,9 +173,12 @@
     const _Input_clear = Input.clear;
     Input.clear = function() {
         _Input_clear.call(this);
-        for (const key in virtualKeys) {
-            virtualKeys[key] = false;
+        for (const key in vKeys) {
+            if (vKeys[key]) releaseVKey(key);
         }
+        touchMap.dpad = null;
+        touchMap.ok = null;
+        touchMap.cancel = null;
     };
 
     //=======================
@@ -134,7 +195,7 @@
         Sprite.prototype.initialize.call(this);
         this.createBitmap();
         this.opacity = OPACITY;
-        this._activeDirs = { left: false, up: false, right: false, down: false };
+        this._currentDirs = { left: false, up: false, right: false, down: false };
         this.updatePosition();
     };
 
@@ -153,20 +214,23 @@
         ctx.lineWidth = 4;
         ctx.stroke();
 
-        ctx.fillStyle = 'rgba(255, 255, 255, 1)';
+        ctx.fillStyle = 'white';
         const s = r * 0.35;
-        // Desenha 4 setas
-        [[0, -1, 0], [0, 1, Math.PI], [-1, 0, -Math.PI / 2], [1, 0, Math.PI / 2]].forEach(([dx, dy, rot]) => {
-            ctx.save();
-            ctx.translate(cx + dx * (r - 15), cy + dy * (r - 15));
-            ctx.rotate(rot);
+        [[0, -1], [0, 1], [-1, 0], [1, 0]].forEach(([dx, dy]) => {
             ctx.beginPath();
-            ctx.moveTo(0, -s);
-            ctx.lineTo(-s, s);
-            ctx.lineTo(s, s);
+            const x = cx + dx * (r - 15);
+            const y = cy + dy * (r - 15);
+            if (dx === 0) {
+                ctx.moveTo(x, y);
+                ctx.lineTo(x - s, y - dy * s);
+                ctx.lineTo(x + s, y - dy * s);
+            } else {
+                ctx.moveTo(x, y);
+                ctx.lineTo(x - dx * s, y - s);
+                ctx.lineTo(x - dx * s, y + s);
+            }
             ctx.closePath();
             ctx.fill();
-            ctx.restore();
         });
 
         this.bitmap._setDirty();
@@ -184,41 +248,37 @@
         this.visible = SceneManager._scene instanceof Scene_Map;
     };
 
-    // BUGFIX v2.4: Detecção de touch corrigida
     Sprite_Dpad.prototype.updateInput = function() {
         if (!this.visible) {
-            this.clearKeys();
+            this.releaseAll();
             return;
         }
 
-        let foundTouch = false;
+        let foundTouch = null;
+        const touches = TouchInput._touches || [];
 
-        // Checa TouchInput.x/y primeiro
-        if (TouchInput.isPressed()) {
-            const pos = new Point(TouchInput.x, TouchInput.y);
+        for (let i = 0; i < touches.length; i++) {
+            const touch = touches[i];
+            if (!touch) continue;
+            
+            const pos = new Point(touch.pageX, touch.pageY);
             const local = this.worldTransform.applyInverse(pos);
+            
             if (this.isInside(local.x, local.y)) {
-                foundTouch = true;
-                this.processTouch(local.x, local.y);
+                foundTouch = touch;
+                break;
             }
         }
 
-        // BUGFIX: Checa _touches se existir
-        if (!foundTouch && TouchInput._touches) {
-            for (let i = 0; i < TouchInput._touches.length; i++) {
-                const touch = TouchInput._touches[i];
-                const pos = new Point(touch.pageX, touch.pageY);
-                const local = this.worldTransform.applyInverse(pos);
-                if (this.isInside(local.x, local.y)) {
-                    foundTouch = true;
-                    this.processTouch(local.x, local.y);
-                    break;
-                }
+        if (foundTouch) {
+            if (touchMap.dpad === null) {
+                touchMap.dpad = foundTouch.identifier;
+                log('Touch dpad INICIOU');
             }
-        }
-
-        if (!foundTouch) {
-            this.clearKeys();
+            const local = this.worldTransform.applyInverse(new Point(foundTouch.pageX, foundTouch.pageY));
+            this.processTouch(local.x, local.y);
+        } else if (touchMap.dpad!== null) {
+            this.releaseAll();
         }
     };
 
@@ -236,7 +296,7 @@
         const dist = Math.sqrt(dx * dx + dy * dy);
 
         if (dist < DPAD_SIZE * 0.15) {
-            this.clearKeys();
+            this.releaseAll();
             return;
         }
 
@@ -249,24 +309,31 @@
         else if (deg >= -135 && deg < -45) newDirs.up = true;
 
         for (const dir in newDirs) {
-            if (newDirs[dir]!== this._activeDirs[dir]) {
-                this._activeDirs[dir] = newDirs[dir];
-                setVirtualKey(dir, newDirs[dir]);
+            if (newDirs[dir] &&!this._currentDirs[dir]) {
+                this._currentDirs[dir] = true;
+                pressVKey(dir, touchMap.dpad);
+            } else if (!newDirs[dir] && this._currentDirs[dir]) {
+                this._currentDirs[dir] = false;
+                releaseVKey(dir);
             }
         }
     };
 
-    Sprite_Dpad.prototype.clearKeys = function() {
-        for (const dir in this._activeDirs) {
-            if (this._activeDirs[dir]) {
-                this._activeDirs[dir] = false;
-                setVirtualKey(dir, false);
+    Sprite_Dpad.prototype.releaseAll = function() {
+        if (touchMap.dpad!== null) {
+            log('Touch dpad SOLTOU');
+            touchMap.dpad = null;
+        }
+        for (const dir in this._currentDirs) {
+            if (this._currentDirs[dir]) {
+                this._currentDirs[dir] = false;
+                releaseVKey(dir);
             }
         }
     };
 
     //=======================
-    // Botões A e B
+    // Sprite Botão
     //=======================
     function Sprite_Button() {
         this.initialize.apply(this, arguments);
@@ -275,12 +342,13 @@
     Sprite_Button.prototype = Object.create(Sprite.prototype);
     Sprite_Button.prototype.constructor = Sprite_Button;
 
-    Sprite_Button.prototype.initialize = function(keyName, label, color) {
+    Sprite_Button.prototype.initialize = function(keyName, label, color, index) {
         Sprite.prototype.initialize.call(this);
         this._keyName = keyName;
         this._label = label;
         this._color = color;
-        this._touching = false;
+        this._index = index;
+        this._touchId = null;
         this.createBitmap();
         this.opacity = OPACITY;
         this.updatePosition();
@@ -295,7 +363,7 @@
         ctx.arc(BTN_SIZE / 2, BTN_SIZE / 2, r, 0, Math.PI * 2);
         ctx.fillStyle = this._color;
         ctx.fill();
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
+        ctx.strokeStyle = 'white';
         ctx.lineWidth = 3;
         ctx.stroke();
 
@@ -308,11 +376,10 @@
     };
 
     Sprite_Button.prototype.updatePosition = function() {
-        const isLeft = DPAD_POS === 'right';
-        const baseX = isLeft? MARGIN : Graphics.width - BTN_SIZE - MARGIN;
-        const offset = this._keyName === 'cancel'? BTN_SIZE + 20 : 0;
-        
-        this.x = isLeft? baseX + offset : baseX - offset;
+        const isRight = DPAD_POS === 'left';
+        const baseX = isRight? Graphics.width - BTN_SIZE - MARGIN : MARGIN;
+        const offset = this._index * (BTN_SIZE + 20);
+        this.x = isRight? baseX - offset : baseX + offset;
         this.y = Graphics.height - BTN_SIZE - MARGIN;
     };
 
@@ -321,7 +388,7 @@
         this.updatePosition();
         this.updateInput();
         this.visible = SceneManager._scene instanceof Scene_Map;
-        this.scale.set(this._touching? 0.85 : 1.0);
+        this.scale.set(this._touchId!== null? 0.85 : 1.0);
     };
 
     Sprite_Button.prototype.updateInput = function() {
@@ -330,28 +397,40 @@
             return;
         }
 
-        let touching = false;
+        let foundTouch = null;
+        const touches = TouchInput._touches || [];
 
-        if (TouchInput.isPressed()) {
-            const pos = new Point(TouchInput.x, TouchInput.y);
+        for (let i = 0; i < touches.length; i++) {
+            const touch = touches[i];
+            if (!touch) continue;
+            
+            const pos = new Point(touch.pageX, touch.pageY);
             const local = this.worldTransform.applyInverse(pos);
             const dx = local.x - BTN_SIZE / 2;
             const dy = local.y - BTN_SIZE / 2;
-            touching = Math.sqrt(dx * dx + dy * dy) <= BTN_SIZE / 2;
+            
+            if (Math.sqrt(dx * dx + dy * dy) <= BTN_SIZE / 2) {
+                foundTouch = touch;
+                break;
+            }
         }
 
-        if (touching &&!this._touching) {
-            this._touching = true;
-            setVirtualKey(this._keyName, true);
-        } else if (!touching && this._touching) {
+        if (foundTouch) {
+            if (this._touchId === null) {
+                this._touchId = foundTouch.identifier;
+                touchMap[this._keyName] = foundTouch.identifier;
+                pressVKey(this._keyName, this._touchId);
+            }
+        } else {
             this.release();
         }
     };
 
     Sprite_Button.prototype.release = function() {
-        if (this._touching) {
-            this._touching = false;
-            setVirtualKey(this._keyName, false);
+        if (this._touchId!== null) {
+            this._touchId = null;
+            touchMap[this._keyName] = null;
+            releaseVKey(this._keyName);
         }
     };
 
@@ -362,8 +441,8 @@
     Scene_Map.prototype.createDisplayObjects = function() {
         _Scene_Map_createDisplayObjects.call(this);
         this._mobileDpad = new Sprite_Dpad();
-        this._mobileBtnA = new Sprite_Button('ok', 'A', 'rgba(0, 200, 0, 0.6)');
-        this._mobileBtnB = new Sprite_Button('cancel', 'B', 'rgba(200, 0, 0, 0.6)');
+        this._mobileBtnA = new Sprite_Button('ok', 'A', 'rgba(0, 200, 0, 0.6)', 0);
+        this._mobileBtnB = new Sprite_Button('cancel', 'B', 'rgba(200, 0, 0, 0.6)', 1);
         this.addChild(this._mobileDpad);
         this.addChild(this._mobileBtnA);
         this.addChild(this._mobileBtnB);
