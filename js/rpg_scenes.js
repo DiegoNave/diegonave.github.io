@@ -2687,3 +2687,9 @@ Scene_Gameover.prototype.isTriggered = function() {
 Scene_Gameover.prototype.gotoTitle = function() {
     SceneManager.goto(Scene_Title);
 };
+
+Scene_Message.prototype.createChoiceWindow = function() {
+    this._choiceWindow = new Window_ChoiceList(this);
+    // this._choiceWindow.setHelpWindow(this._helpWindow); // desliga
+    this.addWindow(this._choiceWindow);
+};

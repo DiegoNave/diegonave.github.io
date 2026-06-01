@@ -1234,8 +1234,8 @@ Window_Selectable.prototype.callUpdateHelp = function() {
     }
 };
 
-Window_ChoiceList.prototype.updateHelp = function() {
-    this._helpWindow.setText('e ai?');
+Window_Selectable.prototype.updateHelp = function() {
+    this._helpWindow.clear();
 };
 
 Window_Selectable.prototype.setHelpWindowItem = function(item) {

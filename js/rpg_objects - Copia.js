@@ -356,7 +356,6 @@ Game_Message.prototype.clear = function() {
 
 Game_Message.prototype.choices = function() {
     return this._choices;
-	 this._helpWindow.setText('Opções');
 };
 
 Game_Message.prototype.faceName = function() {

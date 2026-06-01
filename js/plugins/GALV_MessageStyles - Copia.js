@@ -773,7 +773,6 @@ Window_ChoiceList.prototype.initialize = function(messageWindow) {
 };
 
 
-
 Galv.Mstyle.Window_ChoiceList_drawItem = Window_ChoiceList.prototype.drawItem;
 Window_ChoiceList.prototype.drawItem = function(index) {
 	if (!Galv.Mstyle.outline) this.contents._drawTextOutline = function() {};
@@ -816,14 +815,4 @@ Window_ChoiceList.prototype.updateChoiceFloat = function(x,w,y,h) {
 	};
 //};
 
-Window_ChoiceList.prototype.updateHelp = function() {
-    this._helpWindow.setText('Opções'); // era 選択肢
-};
-
-    // ... resto do código do Galv
-
-    // Tradução da janela de escolha
-    Window_ChoiceList.prototype.updateHelp = function() {
-        this._helpWindow.setText('Opções');
-    };
-})(); // última linha original
+})();
